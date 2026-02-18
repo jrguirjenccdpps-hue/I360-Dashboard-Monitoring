@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>i360 Monitoring Dashboard</title>
+
+<!-- Libraries -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<style>
+body { font-family: "Segoe UI", Arial; background:#f4f6f9; padding:40px; color:#064e3b; }
+h2 { text-align:center; color:#064e3b; margin-bottom:30px; }
+
+.search-container { text-align:center; margin-bottom:30px; }
+input { width:300px; padding:12px; border-radius:8px; border:1px solid #a7f3d0; }
+button { padding:12px 18px; margin-left:10px; border-radius:8px; border:none; background:#059669; color:white; cursor:pointer; }
+button:hover { background:#047857; }
+
+.card { background:white; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.1); margin-bottom:20px; }
+.card-row { display:flex; justify-content:space-between; margin-bottom:6px; }
+.card-label { font-weight:bold; width:170px; color:#064e3b; }
+
+.status-high { background:#ffcccc; color:#b30000; padding:4px 8px; border-radius:6px; }
+.status-normal { background:#ccffcc; color:#006600; padding:4px 8px; border-radius:6px; }
+
+.chart-container {
+  margin-top:20px;
+  background:white;
+  padding:20px;
+  border-radius:12px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.1);
+}
+
+.notfound { color:red; font-weight:bold; text-align:center; }
+</style>
+</head>
+
+<body>
+
+<h2>i360 Monitoring Dashboard</h2>
+
+<div class="search-container">
+  <input type="text" id="customerId" placeholder="Enter Customer ID">
+  <button onclick="searchCustomer()">Search</button>
+  <button onclick="exportToExcel()">📥 Export to Excel</button>
+</div>
+
+<div id="results"></div>
+
+<script>
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwCsh3e73oOly4-F0qhDsZVyWfIIrBNGCMkxz2uJ0FkKkYMJeRIjCSgg_aClQTAK0K3/exec";
+let globalData = [];
+
+// Format values for display
+function formatValue(key, value){
+  if(!value) return "";
+  if(key === "Amount") return Number(value).toLocaleString('en-PH',{style:'currency',currency:'PHP'});
+  if(key === "Total Transaction") return Number(value).toLocaleString('en-PH');
+  if(key === "Date of Alert") {
+    const d = new Date(value);
+    if(!isNaN(d)) return d.toLocaleDateString('en-PH',{year:'numeric',month:'long',day:'numeric'});
+  }
+  if(key === "Document Link" && value) return `<a href="${value}" target="_blank">Open Document</a>`;
+  return value;
+}
+
+// Generate monthly summaries for count & amount
+function generateMonthlySummary(data){
+  const summary = {};
+  data.forEach(row=>{
+    const date = new Date(row["Date of Alert"]);
+    const amount = parseFloat(row["Amount"]) || 0;
+    if(isNaN(date)) return;
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    if(!summary[year]) summary[year] = Array(12).fill(0).map(()=>({count:0,total:0}));
+    summary[year][month].count++;
+    summary[year][month].total += amount;
+  });
+  return summary;
+}
+
+// Render results cards
+function renderResults(data){
+  const resultsDiv = document.getElementById("results");
+  resultsDiv.innerHTML = "";
+
+  if(!data || data.length === 0){
+    resultsDiv.innerHTML = "<p class='notfound'>No record found</p>";
+    return;
+  }
+
+  data.forEach(row=>{
+    const card = document.createElement("div");
+    card.className = "card";
+    Object.entries(row).forEach(([k,v])=>{
+      if(k === "Status") v = `<span class="${v.toLowerCase()==='high'?'status-high':'status-normal'}">${v}</span>`;
+      v = formatValue(k,v);
+      const rowDiv = document.createElement("div");
+      rowDiv.className="card-row";
+      rowDiv.innerHTML = `<div class="card-label">${k}</div><div>${v}</div>`;
+      card.appendChild(rowDiv);
+    });
+    resultsDiv.appendChild(card);
+  });
+}
+
+// Render charts
+function renderCharts(summary){
+  Object.keys(summary).forEach(year=>{
+    const container = document.createElement("div");
+    container.className="chart-container";
+
+    const title = document.createElement("h3");
+    title.textContent=`Monthly Alerts & Amounts - ${year}`;
+    container.appendChild(title);
+
+    const canvas = document.createElement("canvas");
+    container.appendChild(canvas);
+    document.getElementById("results").appendChild(container);
+
+    new Chart(canvas,{
+      type:'bar',
+      data:{
+        labels:["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
+        datasets:[
+          { label:'Alert Count', data: summary[year].map(m=>m.count), backgroundColor:'#059669' },
+          { label:'Total Amount', data: summary[year].map(m=>m.total), backgroundColor:'#064e3b' }
+        ]
+      },
+      options:{
+        responsive:true,
+        plugins:{ legend:{position:'top'}},
+        scales:{
+          y:{beginAtZero:true,ticks:{precision:0}}
+        }
+      }
+    });
+  });
+}
+
+// Search customer
+async function searchCustomer(){
+  const id = document.getElementById("customerId").value.trim();
+  if(!id) return alert("Enter Customer ID");
+
+  const resultsDiv = document.getElementById("results");
+  resultsDiv.innerHTML="<p>Loading...</p>";
+
+  try{
+    const res = await fetch(`${WEB_APP_URL}?customerId=${encodeURIComponent(id)}`);
+    const response = await res.json();
+    if(!response.success || response.data.length === 0){
+      resultsDiv.innerHTML="<p class='notfound'>No record found</p>";
+      return;
+    }
+
+    globalData = response.data;
+    renderResults(globalData);
+    const summary = generateMonthlySummary(globalData);
+    renderCharts(summary);
+
+  }catch(err){
+    console.error(err);
+    resultsDiv.innerHTML="<p class='notfound'>Error fetching data</p>";
+  }
+}
+
+// Export to Excel
+function exportToExcel(){
+  if(!globalData || globalData.length===0){ alert("No data to export."); return; }
+
+  const ws_data = [];
+  // headers
+  ws_data.push(Object.keys(globalData[0]));
+
+  // rows
+  globalData.forEach(row=>{
+    ws_data.push(Object.values(row));
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(ws_data);
+  XLSX.utils.book_append_sheet(wb, ws, "Customer Data");
+  XLSX.writeFile(wb, "i360_Report.xlsx");
+}
+</script>
+
+</body>
+</html>
