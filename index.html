@@ -38,7 +38,7 @@ button:hover { background:#047857; }
 
 <body>
 
-<h2>i360 Monitoring Dashboard</h2>
+<h2>Pawn and MC Customer Flagged Monitoring System</h2>
 
 <div class="search-container">
   <input type="text" id="customerId" placeholder="Enter Customer ID">
@@ -183,7 +183,7 @@ function exportToExcel(){
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(ws_data);
   XLSX.utils.book_append_sheet(wb, ws, "Customer Data");
-  XLSX.writeFile(wb, "i360_Report.xlsx");
+  XLSX.writeFile(wb, "Pawn and MC Customer Flagged Monitoring System_Report.xlsx");
 }
 </script>
 
