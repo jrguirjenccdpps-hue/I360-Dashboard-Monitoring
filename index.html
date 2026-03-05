@@ -374,6 +374,59 @@ body {
 }
 
 /* ============================================
+   ASSIGNED TO LIST
+   ============================================ */
+.assigned-to-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.assigned-to-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  transition: all 0.2s ease;
+}
+
+.assigned-to-item:hover {
+  background: var(--bg-primary);
+  border-color: var(--primary-light);
+  transform: translateX(4px);
+}
+
+.assigned-to-avatar {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, var(--info) 0%, var(--primary-light) 100%);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  color: white;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.assigned-to-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.no-assigned {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ============================================
    BRANCHES GRID
    ============================================ */
 .branches-grid {
@@ -583,6 +636,13 @@ body {
 .amount-high {
   color: var(--danger);
   font-weight: 700;
+}
+
+/* Assigned to styling */
+.assigned-to {
+  font-weight: 600;
+  color: var(--info);
+  font-size: 0.9rem;
 }
 
 /* ============================================
@@ -866,7 +926,6 @@ body {
 .fade-in { animation: fadeIn 0.5s ease-out; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 </style>
-<base target="_blank">
 </head>
 
 <body>
@@ -979,7 +1038,7 @@ body {
           <th>Transaction Type</th>
           <th>Amount (PHP)</th>
           <th>Status</th>
-          <th>Notes</th>
+          <th>Assigned To</th>
         </tr>
       </thead>
       <tbody id="reportTableBody"></tbody>
@@ -1053,9 +1112,28 @@ function calculateStats(data) {
   const highRisk = data.filter(r => r["Status"]?.toLowerCase() === "high").length;
   const normal = data.filter(r => r["Status"]?.toLowerCase() === "normal").length;
   
-  // Get unique assigned person from Column L
-  const assignedPersons = [...new Set(data.map(r => r["Assigned To"]).filter(Boolean))];
-  const assignedTo = assignedPersons.length > 0 ? assignedPersons[0] : 'Unassigned';
+  // Calculate assigned to counts (handle both spellings)
+  const assignedToCounts = data.reduce((acc, row) => {
+    const name = row["Assigned To"] || row["Assisgned to"];
+    if (name) {
+      acc[name] = (acc[name] || 0) + 1;
+    }
+    return acc;
+  }, {});
+  
+  // Get unique assigned to names (deduplicated)
+  const uniqueAssignedTo = Object.keys(assignedToCounts);
+  
+  // Get most assigned person (primary case officer)
+  let mostAssignedTo = 'Unassigned';
+  let maxCount = 0;
+  
+  Object.entries(assignedToCounts).forEach(([name, count]) => {
+    if (count > maxCount) {
+      maxCount = count;
+      mostAssignedTo = name;
+    }
+  });
   
   // Calculate branch counts
   const branchCounts = data.reduce((acc, row) => {
@@ -1072,7 +1150,10 @@ function calculateStats(data) {
     highRisk,
     normal,
     avgAmount: data.length ? totalAmount / data.length : 0,
-    assignedTo,
+    uniqueAssignedTo,
+    assignedToCounts,
+    mostAssignedTo,
+    mostAssignedCount: maxCount,
     branchCounts
   };
 }
@@ -1169,8 +1250,10 @@ function renderDashboard(data) {
 
       <div class="content-grid">
         ${renderDocumentsCard(data)}
-        ${renderAssignedToCard(stats.assignedTo)}
+        ${renderCaseAssignmentCard(stats.mostAssignedTo, stats.mostAssignedCount, stats.assignedToCounts)}
       </div>
+
+      ${renderAssignedToCard(stats.uniqueAssignedTo)}
 
       ${renderTransactionTable(data)}
 
@@ -1209,11 +1292,11 @@ function renderStatsCards(stats) {
 
       <div class="stat-card info">
         <div class="stat-header">
-          <span class="stat-label">Assigned To</span>
-          <span class="stat-icon">👤</span>
+          <span class="stat-label">Assigned Officers</span>
+          <span class="stat-icon">👥</span>
         </div>
-        <div class="stat-value" style="font-size: 1.25rem;">${stats.assignedTo}</div>
-        <div class="stat-subtext">Case officer</div>
+        <div class="stat-value">${stats.uniqueAssignedTo.length}</div>
+        <div class="stat-subtext">Unique personnel</div>
       </div>
 
       <div class="stat-card purple">
@@ -1366,21 +1449,68 @@ function renderDocumentsCard(data) {
   `;
 }
 
-function renderAssignedToCard(assignedTo) {
+function renderCaseAssignmentCard(mostAssignedTo, count, allCounts) {
+  // Calculate total for percentage
+  const total = Object.values(allCounts).reduce((a, b) => a + b, 0);
+  const percentage = total > 0 ? Math.round((count / total) * 100) : 0;
+  
   return `
     <div class="card">
       <div class="card-header">
-        <div class="card-title">👤 Case Assignment</div>
+        <div class="card-title">🎯 Case Assignment</div>
+        <span style="font-size: 0.9rem; color: var(--text-muted);">Primary Officer</span>
       </div>
       <div class="card-body">
         <div style="display: flex; align-items: center; gap: 15px; padding: 10px 0;">
-          <div style="width: 60px; height: 60px; background: linear-gradient(135deg, var(--info) 0%, var(--primary-light) 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; color: white; font-weight: 700;">
-            ${assignedTo.charAt(0).toUpperCase()}
+          <div style="width: 70px; height: 70px; background: linear-gradient(135deg, var(--accent) 0%, var(--accent-light) 100%); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; color: white; font-weight: 700;">
+            ${mostAssignedTo.charAt(0).toUpperCase()}
           </div>
-          <div>
-            <div style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;">${assignedTo}</div>
-            <div style="font-size: 0.875rem; color: var(--text-muted);">Primary Case Officer</div>
+          <div style="flex: 1;">
+            <div style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;">${mostAssignedTo}</div>
+            <div style="font-size: 0.875rem; color: var(--text-muted); margin-bottom: 8px;">Primary Case Officer</div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="flex: 1; height: 6px; background: var(--bg-secondary); border-radius: 3px; overflow: hidden;">
+                <div style="width: ${percentage}%; height: 100%; background: linear-gradient(90deg, var(--accent) 0%, var(--accent-light) 100%); transition: width 0.5s ease;"></div>
+              </div>
+              <span style="font-size: 0.8rem; font-weight: 600; color: var(--accent);">${count} of ${total} (${percentage}%)</span>
+            </div>
           </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAssignedToCard(uniqueNames) {
+  if (uniqueNames.length === 0) {
+    return `
+      <div class="card" style="margin-bottom: 30px;">
+        <div class="card-header">
+          <div class="card-title">👥 Assigned To</div>
+        </div>
+        <div class="card-body">
+          <div class="no-assigned">No assigned officers found.</div>
+        </div>
+      </div>
+    `;
+  }
+
+  const items = uniqueNames.map(name => `
+    <div class="assigned-to-item">
+      <div class="assigned-to-avatar">${name.charAt(0).toUpperCase()}</div>
+      <span class="assigned-to-name">${name}</span>
+    </div>
+  `).join('');
+
+  return `
+    <div class="card" style="margin-bottom: 30px;">
+      <div class="card-header">
+        <div class="card-title">👥 Assigned To</div>
+        <span style="font-size: 0.9rem; color: var(--text-muted);">${uniqueNames.length} officer(s)</span>
+      </div>
+      <div class="card-body" style="padding: 20px;">
+        <div class="assigned-to-list">
+          ${items}
         </div>
       </div>
     </div>
@@ -1391,6 +1521,8 @@ function renderTransactionTable(data) {
   const rows = data.map((row, index) => {
     const amount = parseFloat(row["Amount"]) || 0;
     const isHigh = row["Status"]?.toLowerCase() === "high";
+    // Get Assigned To from Column L (handle both spellings)
+    const assignedTo = row["Assigned To"] || row["Assisgned to"] || '—';
 
     return `
       <tr>
@@ -1403,7 +1535,7 @@ function renderTransactionTable(data) {
             ${row["Status"] || 'Unknown'}
           </span>
         </td>
-        <td>${row["Notes"] || '—'}</td>
+        <td class="assigned-to">${assignedTo}</td>
       </tr>
     `;
   }).join('');
@@ -1424,7 +1556,7 @@ function renderTransactionTable(data) {
                 <th>Type</th>
                 <th>Amount</th>
                 <th>Status</th>
-                <th>Notes</th>
+                <th>Assigned To</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -1558,6 +1690,8 @@ function renderRecordsCards(data) {
   const cards = data.map((row, index) => {
     const isHigh = row["Status"]?.toLowerCase() === "high";
     const amount = parseFloat(row["Amount"]) || 0;
+    // Get Assigned To from Column L (handle both spellings)
+    const assignedTo = row["Assigned To"] || row["Assisgned to"] || '—';
 
     return `
       <div class="record-card">
@@ -1582,6 +1716,10 @@ function renderRecordsCards(data) {
             <span class="status-badge ${isHigh ? 'status-high' : 'status-normal'}">
               ${row["Status"] || 'Unknown'}
             </span>
+          </div>
+          <div class="record-field">
+            <span class="record-label">Assigned To</span>
+            <span class="record-value" style="color: var(--info); font-weight: 600;">${assignedTo}</span>
           </div>
         </div>
         <div class="record-actions">
@@ -1671,6 +1809,7 @@ function generateReport() {
   const tbody = document.getElementById('reportTableBody');
   tbody.innerHTML = globalData.map((row, index) => {
     const isHigh = row["Status"]?.toLowerCase() === "high";
+    const assignedTo = row["Assigned To"] || row["Assisgned to"] || '';
     return `
       <tr>
         <td>${index + 1}</td>
@@ -1678,7 +1817,7 @@ function generateReport() {
         <td>${row["Transaction Type"] || ''}</td>
         <td>${formatCurrency(row["Amount"])}</td>
         <td style="color: ${isHigh ? 'var(--danger)' : 'var(--success)'}; font-weight: bold;">${row["Status"] || ''}</td>
-        <td>${row["Notes"] || ''}</td>
+        <td>${assignedTo}</td>
       </tr>
     `;
   }).join('');
