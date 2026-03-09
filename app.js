@@ -1,10 +1,10 @@
 // ============================================
-// CONFIGURATION - UPDATE THIS URL AFTER DEPLOYMENT
+// CONFIGURATION - UPDATE THIS URL
 // ============================================
-const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxeBMerKgXFX0L3ZsKZHMkayCKFFoCek3NtdAb3UNYjJOsX6L9vya9Low1LL1FQHo1u/exec";
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzZFeZRidkXQF1R4Q4shPiT52FEqVWCXmd4e2LFrkzm3EAAL2Wd7cGCjCyKkTvXNsLU/exec";
 
 // Session Configuration
-const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes in milliseconds
+const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 let sessionTimer = null;
 let sessionExpiry = null;
 
@@ -28,44 +28,46 @@ async function handleLogin(event) {
     const errorDiv = document.getElementById('loginError');
     const loginBtn = document.getElementById('loginBtn');
     
-    // Show loading state
     loginBtn.disabled = true;
     loginBtn.innerHTML = '<span>⏳</span> Authenticating...';
     errorDiv.classList.remove('show');
     
     try {
-        // Build URL with parameters
+        // Get client info from browser
+        const clientInfo = await getClientInfo();
+        
         const params = new URLSearchParams({
             action: 'authenticate',
             username: username,
-            password: password
+            password: password,
+            ip: clientInfo.ip,
+            deviceType: clientInfo.deviceType,
+            browser: clientInfo.browser,
+            os: clientInfo.os,
+            userAgent: clientInfo.userAgent,
+            referrer: clientInfo.referrer
         });
         
         const response = await fetch(`${WEB_APP_URL}?${params.toString()}`);
         const result = await response.json();
         
         if (result.success) {
-            // Store session data
+            // Store session data with AGENT NAME
             currentUser = {
                 username: result.user.username,
+                agentName: result.user.agentName,  // Agent Name from Column C
                 role: result.user.role,
                 department: result.user.department,
-                email: result.user.email,
                 sessionToken: result.sessionToken,
                 loginTime: new Date().toISOString()
             };
             
-            // Save to session storage
             sessionStorage.setItem('pgcpi_user', JSON.stringify(currentUser));
             sessionStorage.setItem('pgcpi_sessionExpiry', Date.now() + SESSION_TIMEOUT);
             
-            // Start session timer
             startSessionTimer();
-            
-            // Show main app
             showMainApp();
             
-            // Clear form
             document.getElementById('username').value = '';
             document.getElementById('password').value = '';
             
@@ -82,6 +84,56 @@ async function handleLogin(event) {
     }
 }
 
+async function getClientInfo() {
+    const info = {
+        ip: 'Unknown',
+        deviceType: 'Unknown',
+        browser: 'Unknown',
+        os: 'Unknown',
+        userAgent: navigator.userAgent || 'Unknown',
+        referrer: document.referrer || 'Direct Access'
+    };
+    
+    const ua = navigator.userAgent;
+    
+    // Device Type
+    if (/Mobile|Android|iPhone|iPod/i.test(ua)) {
+        info.deviceType = /iPad|Tablet/i.test(ua) ? 'Tablet' : 'Mobile';
+    } else {
+        info.deviceType = 'Desktop';
+    }
+    
+    // Browser
+    if (/Chrome/i.test(ua) && !/Edge/i.test(ua)) info.browser = 'Chrome';
+    else if (/Firefox/i.test(ua)) info.browser = 'Firefox';
+    else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) info.browser = 'Safari';
+    else if (/Edge/i.test(ua)) info.browser = 'Edge';
+    else if (/Opera|OPR/i.test(ua)) info.browser = 'Opera';
+    else info.browser = 'Other';
+    
+    // OS
+    if (/Windows NT 10/i.test(ua)) info.os = 'Windows 10/11';
+    else if (/Windows NT 6.3/i.test(ua)) info.os = 'Windows 8.1';
+    else if (/Windows NT 6.2/i.test(ua)) info.os = 'Windows 8';
+    else if (/Windows NT 6.1/i.test(ua)) info.os = 'Windows 7';
+    else if (/Mac OS X|macOS/i.test(ua)) info.os = 'macOS';
+    else if (/Linux/i.test(ua) && !/Android/i.test(ua)) info.os = 'Linux';
+    else if (/Android/i.test(ua)) info.os = 'Android';
+    else if (/iOS|iPhone|iPad/i.test(ua)) info.os = 'iOS';
+    else info.os = 'Other';
+    
+    // Get IP
+    try {
+        const ipResponse = await fetch('https://api.ipify.org?format=json');
+        const ipData = await ipResponse.json();
+        info.ip = ipData.ip;
+    } catch (e) {
+        console.log('Could not get IP');
+    }
+    
+    return info;
+}
+
 function showLoginError(message) {
     const errorDiv = document.getElementById('loginError');
     document.getElementById('loginErrorText').textContent = message;
@@ -90,24 +142,19 @@ function showLoginError(message) {
 
 function startSessionTimer() {
     sessionExpiry = Date.now() + SESSION_TIMEOUT;
-    
-    // Update timer display every minute
-    if (sessionTimer) clearInterval(sessionTimer);
-    
     updateSessionDisplay();
+    
+    if (sessionTimer) clearInterval(sessionTimer);
     
     sessionTimer = setInterval(() => {
         const remaining = sessionExpiry - Date.now();
-        
         if (remaining <= 0) {
             handleLogout();
             alert('Session expired. Please login again.');
             return;
         }
-        
         updateSessionDisplay();
-        
-    }, 60000); // Update every minute
+    }, 60000);
 }
 
 function updateSessionDisplay() {
@@ -117,22 +164,16 @@ function updateSessionDisplay() {
     
     if (timerDisplay) {
         timerDisplay.textContent = `Session: ${minutes}m remaining`;
-        if (minutes < 5) timerDisplay.style.color = 'var(--danger)';
-        else timerDisplay.style.color = 'var(--text-muted)';
+        timerDisplay.style.color = minutes < 5 ? 'var(--danger)' : 'var(--text-muted)';
     }
 }
 
 function handleLogout() {
-    if (sessionTimer) {
-        clearInterval(sessionTimer);
-        sessionTimer = null;
-    }
-    
+    if (sessionTimer) clearInterval(sessionTimer);
     sessionStorage.removeItem('pgcpi_user');
     sessionStorage.removeItem('pgcpi_sessionExpiry');
     currentUser = null;
     
-    // Destroy charts
     chartInstances.forEach(chart => chart.destroy());
     chartInstances = [];
     if (branchChartInstance) {
@@ -148,11 +189,15 @@ function showMainApp() {
     document.getElementById('mainApp').classList.add('logged-in');
     
     if (currentUser) {
-        document.getElementById('userAvatar').textContent = currentUser.username.charAt(0).toUpperCase();
-        document.getElementById('userNameDisplay').textContent = currentUser.username;
+        // Display AGENT NAME instead of username
+        const displayName = currentUser.agentName || currentUser.username;
+        const initial = displayName.charAt(0).toUpperCase();
+        
+        document.getElementById('userAvatar').textContent = initial;
+        document.getElementById('userNameDisplay').textContent = displayName;
         document.getElementById('userRoleDisplay').textContent = currentUser.role;
-        document.getElementById('welcomeUser').textContent = currentUser.username;
-        document.getElementById('reportGeneratedBy').textContent = currentUser.username;
+        document.getElementById('welcomeUser').textContent = displayName;
+        document.getElementById('reportGeneratedBy').textContent = displayName;
     }
 }
 
@@ -162,7 +207,6 @@ function checkExistingSession() {
     
     if (saved && expiry) {
         if (Date.now() > parseInt(expiry)) {
-            // Session expired
             sessionStorage.removeItem('pgcpi_user');
             sessionStorage.removeItem('pgcpi_sessionExpiry');
             return;
@@ -283,7 +327,7 @@ async function searchCustomer() {
 
     } catch (error) {
         console.error('Search error:', error);
-        showError('Failed to retrieve data. Please check your connection and try again.');
+        showError('Failed to retrieve data. Please check your connection.');
     }
 }
 
@@ -413,17 +457,17 @@ function renderCustomerInfoCard(record) {
         <div class="card">
             <div class="card-header"><div class="card-title">👤 Customer Profile</div></div>
             <div class="card-body">
-                <div class="record-field" style="margin-bottom: 15px;">
-                    <span class="record-label">Customer Name</span>
-                    <span class="record-value" style="font-size: 1.2rem;">${escapeHtml(record["Customer Name"]) || 'N/A'}</span>
+                <div style="margin-bottom: 15px;">
+                    <span style="display:block; font-size: 0.875rem; color: var(--text-muted); margin-bottom: 4px;">Customer Name</span>
+                    <span style="font-size: 1.2rem; font-weight: 600;">${escapeHtml(record["Customer Name"]) || 'N/A'}</span>
                 </div>
-                <div class="record-field" style="margin-bottom: 15px;">
-                    <span class="record-label">Customer ID</span>
-                    <span class="record-value">${escapeHtml(currentCustomer)}</span>
+                <div style="margin-bottom: 15px;">
+                    <span style="display:block; font-size: 0.875rem; color: var(--text-muted); margin-bottom: 4px;">Customer ID</span>
+                    <span style="font-weight: 600;">${escapeHtml(currentCustomer)}</span>
                 </div>
-                <div class="record-field">
-                    <span class="record-label">Account Status</span>
-                    <span class="record-value" style="color: var(--success);">● Active</span>
+                <div>
+                    <span style="display:block; font-size: 0.875rem; color: var(--text-muted); margin-bottom: 4px;">Account Status</span>
+                    <span style="color: var(--success); font-weight: 600;">● Active</span>
                 </div>
             </div>
         </div>
@@ -451,24 +495,29 @@ function renderDocumentsCard(data) {
     const seenDocs = new Set();
     data.forEach(row => {
         const docName = row["Document"];
-        const validity = row["Validity"];
-        const link = row["Document Link"];
         if (docName && !seenDocs.has(docName)) {
             seenDocs.add(docName);
-            documents.push({ name: docName, validity: validity, link: link });
+            documents.push({ 
+                name: docName, 
+                validity: row["Validity"], 
+                link: row["Document Link"] 
+            });
         }
     });
+    
     if (documents.length === 0) {
         return `<div class="card"><div class="card-header"><div class="card-title">📎 Documents Submitted</div></div><div class="card-body"><div style="text-align: center; padding: 40px; color: var(--text-muted);">No documents available.</div></div></div>`;
     }
+    
     const rows = documents.map((doc, index) => `
         <tr>
             <td>${index + 1}</td>
             <td><strong>${escapeHtml(doc.name)}</strong></td>
             <td>${formatDate(doc.validity)}</td>
-            <td>${doc.link ? `<a href="${escapeHtml(doc.link)}" target="_blank" class="doc-link"><span>📄</span><span>View</span></a>` : '<span style="color: var(--text-muted);">—</span>'}</td>
+            <td>${doc.link ? `<a href="${escapeHtml(doc.link)}" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 600;"><span>📄</span> View</a>` : '<span style="color: var(--text-muted);">—</span>'}</td>
         </tr>
     `).join('');
+    
     return `
         <div class="card">
             <div class="card-header"><div class="card-title">📎 Documents Submitted</div><span style="font-size: 0.9rem; color: var(--text-muted);">${documents.length} document(s)</span></div>
@@ -536,7 +585,7 @@ function renderTransactionTable(data) {
                 <td>${escapeHtml(row["Transaction Type"]) || 'General'}</td>
                 <td class="amount ${isHigh ? 'amount-high' : ''}">${formatCurrency(amount)}</td>
                 <td><span class="status-badge ${isHigh ? 'status-high' : 'status-normal'}">${escapeHtml(row["Status"]) || 'Unknown'}</span></td>
-                <td class="assigned-to">${escapeHtml(assignedTo)}</td>
+                <td>${escapeHtml(assignedTo)}</td>
             </tr>
         `;
     }).join('');
@@ -615,7 +664,7 @@ function initializeCharts(data) {
 }
 
 // ============================================
-// ID FINDER - SEARCH BY CUSTOMER NAME
+// ID FINDER
 // ============================================
 async function searchCustomerByName() {
     if (!currentUser) {
@@ -633,7 +682,6 @@ async function searchCustomerByName() {
     }
 
     const container = document.getElementById('finderResults');
-    
     container.innerHTML = `
         <div class="loading-container">
             <div class="spinner"></div>
@@ -646,38 +694,22 @@ async function searchCustomerByName() {
             action: 'findByName',
             customerName: nameInput
         });
-        
-        if (filterInput) {
-            params.append('filter', filterInput);
-        }
+        if (filterInput) params.append('filter', filterInput);
         
         const response = await fetch(`${WEB_APP_URL}?${params.toString()}`);
         const result = await response.json();
 
         if (!result.success) {
-            container.innerHTML = `
-                <div class="alert alert-error">
-                    <span>⚠️</span>
-                    <span>${escapeHtml(result.message)}</span>
-                </div>
-            `;
+            container.innerHTML = `<div class="alert alert-error"><span>⚠️</span><span>${escapeHtml(result.message)}</span></div>`;
             return;
         }
 
         if (!result.data || result.data.length === 0) {
             container.innerHTML = `
-                <div class="alert alert-error">
-                    <span>⚠️</span>
-                    <span>No customers found matching "<strong>${escapeHtml(nameInput)}</strong>"</span>
-                </div>
+                <div class="alert alert-error"><span>⚠️</span><span>No customers found matching "<strong>${escapeHtml(nameInput)}</strong>"</span></div>
                 <div class="alert alert-info" style="margin-top: 10px;">
                     <span>💡</span>
-                    <span>
-                        <strong>Search Tips:</strong><br>
-                        • Try just the last name (e.g., "adrales")<br>
-                        • Remove commas or try "adrales francisca"<br>
-                        • Search is case-insensitive
-                    </span>
+                    <span><strong>Search Tips:</strong><br>• Try just the last name<br>• Remove commas<br>• Search is case-insensitive</span>
                 </div>
             `;
             return;
@@ -686,29 +718,21 @@ async function searchCustomerByName() {
         renderFinderResults(result.data, nameInput);
 
     } catch (error) {
-        console.error('Search error:', error);
-        container.innerHTML = `
-            <div class="alert alert-error">
-                <span>⚠️</span>
-                <span>Failed to search. Please check your connection and try again.</span>
-            </div>
-        `;
+        container.innerHTML = `<div class="alert alert-error"><span>⚠️</span><span>Failed to search. Please check your connection.</span></div>`;
     }
 }
 
 function renderFinderResults(results, searchTerm) {
     const container = document.getElementById('finderResults');
-    
     const tableRows = results.map((item) => {
         const customerId = item["Customer ID"] || '';
         const customerName = item["Customer Name"] || '';
         const branch = item["Assigned Branch"] || '-';
         const officer = item["Assigned To"] || 'Unassigned';
-        
         const highlightedName = customerName.replace(new RegExp(searchTerm, 'gi'), match => `<span class="highlight">${match}</span>`);
         
         return `
-            <tr class="finder-row" onclick="selectCustomerFromFinder('${escapeHtml(customerId)}')" title="Click to view full details">
+            <tr class="finder-row" onclick="selectCustomerFromFinder('${escapeHtml(customerId)}')">
                 <td class="col-id"><span style="font-size: 1.2rem;">🆔</span> ${escapeHtml(customerId)}</td>
                 <td class="col-name">${highlightedName}</td>
                 <td class="col-branch"><span>🏢</span> ${escapeHtml(branch)}</td>
@@ -740,11 +764,6 @@ function renderFinderResults(results, searchTerm) {
                     <tbody>${tableRows}</tbody>
                 </table>
             </div>
-            <div style="padding: 16px 24px; background: var(--bg-secondary); border-top: 1px solid var(--border);">
-                <p style="font-size: 0.875rem; color: var(--text-muted); margin: 0;">
-                    <span>💡</span> Click any row to view full transaction history for that Customer ID
-                </p>
-            </div>
         </div>
     `;
 }
@@ -757,10 +776,7 @@ function selectCustomerFromFinder(customerId) {
 
 function showFinderError(message) {
     document.getElementById('finderResults').innerHTML = `
-        <div class="alert alert-error">
-            <span>⚠️</span>
-            <span>${message}</span>
-        </div>
+        <div class="alert alert-error"><span>⚠️</span><span>${message}</span></div>
     `;
 }
 
@@ -775,14 +791,12 @@ async function searchBranch() {
     }
     
     const branchCode = document.getElementById('branchCode').value.trim().toUpperCase();
-    
     if (!branchCode || branchCode.length !== 3) {
         showBranchError('Please enter exactly 3 letters for the branch code (e.g., AAQ)');
         return;
     }
 
     const container = document.getElementById('branchResults');
-    
     container.innerHTML = `
         <div class="loading-container">
             <div class="spinner"></div>
@@ -805,29 +819,16 @@ async function searchBranch() {
         const result = await response.json();
 
         if (!result.success) {
-            container.innerHTML = `
-                <div class="alert alert-error">
-                    <span>⚠️</span>
-                    <span>${escapeHtml(result.message)}</span>
-                </div>
-            `;
+            container.innerHTML = `<div class="alert alert-error"><span>⚠️</span><span>${escapeHtml(result.message)}</span></div>`;
             return;
         }
 
         if (!result.data || result.data.length === 0) {
             container.innerHTML = `
-                <div class="alert alert-error">
-                    <span>⚠️</span>
-                    <span>No records found for branch code "<strong>${escapeHtml(branchCode)}</strong>"</span>
-                </div>
+                <div class="alert alert-error"><span>⚠️</span><span>No records found for branch code "<strong>${escapeHtml(branchCode)}</strong>"</span></div>
                 <div class="alert alert-info" style="margin-top: 10px;">
                     <span>💡</span>
-                    <span>
-                        <strong>Search Tips:</strong><br>
-                        • Enter exactly 3 letters (e.g., "AAQ" matches "AAQ Palawan branch")<br>
-                        • Search is case-insensitive<br>
-                        • Must match the first 3 characters of Column F (Assigned Branch)
-                    </span>
+                    <span><strong>Search Tips:</strong><br>• Enter exactly 3 letters<br>• Search is case-insensitive</span>
                 </div>
             `;
             currentBranchData = [];
@@ -838,19 +839,12 @@ async function searchBranch() {
         renderBranchResults(result.data, branchCode, result.monthlySummary);
 
     } catch (error) {
-        console.error('Branch search error:', error);
-        container.innerHTML = `
-            <div class="alert alert-error">
-                <span>⚠️</span>
-                <span>Failed to search branch. Please check your connection and try again.</span>
-            </div>
-        `;
+        container.innerHTML = `<div class="alert alert-error"><span>⚠️</span><span>Failed to search branch. Please check your connection.</span></div>`;
     }
 }
 
 function renderBranchResults(data, branchCode, monthlySummary) {
     const container = document.getElementById('branchResults');
-    
     const totalAmount = data.reduce((sum, r) => sum + (parseFloat(r["Amount"]) || 0), 0);
     const totalTransactions = data.reduce((sum, r) => sum + (parseFloat(r["Total Transaction"]) || 0), 0);
     const uniqueBranches = [...new Set(data.map(r => r["Assigned Branch"]))];
@@ -911,15 +905,11 @@ function renderBranchResults(data, branchCode, monthlySummary) {
             </div>
 
             <div class="card" style="margin-bottom: 30px;">
-                <div class="card-header">
-                    <div class="card-title">📅 Monthly Summary - Branch ${escapeHtml(branchCode)}</div>
-                </div>
+                <div class="card-header"><div class="card-title">📅 Monthly Summary - Branch ${escapeHtml(branchCode)}</div></div>
                 <div class="card-body" style="padding: 0;">
                     <div class="table-container">
                         <table class="data-table">
-                            <thead>
-                                <tr><th>Month</th><th>Branch Code</th><th style="text-align: center;">Total Transactions</th><th style="text-align: right;">Amount</th><th style="text-align: center;">Records</th></tr>
-                            </thead>
+                            <thead><tr><th>Month</th><th>Branch Code</th><th style="text-align: center;">Total Transactions</th><th style="text-align: right;">Amount</th><th style="text-align: center;">Records</th></tr></thead>
                             <tbody>${tableRows}</tbody>
                         </table>
                     </div>
@@ -931,9 +921,7 @@ function renderBranchResults(data, branchCode, monthlySummary) {
                     <div class="chart-title">📈 Monthly Comparison: Amount vs Total Transactions</div>
                     <div style="font-size: 0.875rem; color: var(--text-muted);">Branch: <strong>${escapeHtml(branchCode)}</strong></div>
                 </div>
-                <div class="chart-wrapper">
-                    <canvas id="branchChart"></canvas>
-                </div>
+                <div class="chart-wrapper"><canvas id="branchChart"></canvas></div>
             </div>
 
             <div class="card" style="margin-bottom: 30px;">
@@ -1046,10 +1034,7 @@ function initializeBranchChart(monthlySummary, branchCode) {
 
 function showBranchError(message) {
     document.getElementById('branchResults').innerHTML = `
-        <div class="alert alert-error">
-            <span>⚠️</span>
-            <span>${message}</span>
-        </div>
+        <div class="alert alert-error"><span>⚠️</span><span>${message}</span></div>
     `;
 }
 
@@ -1064,7 +1049,7 @@ function exportToExcel() {
     const ws_data = [];
     ws_data.push(['BSP Compliance Monitoring Report']);
     ws_data.push(['Generated:', new Date().toLocaleString()]);
-    ws_data.push(['Generated By:', currentUser ? currentUser.username : 'Unknown']);
+    ws_data.push(['Generated By:', currentUser ? (currentUser.agentName || currentUser.username) : 'Unknown']);
     ws_data.push(['Customer ID:', currentCustomer]);
     ws_data.push(['Customer Name:', globalData[0]["Customer Name"] || '']);
     ws_data.push([]);
@@ -1089,7 +1074,7 @@ function exportBranchToExcel() {
     
     ws_data.push(['Branch Analysis Report']);
     ws_data.push(['Generated:', new Date().toLocaleString()]);
-    ws_data.push(['Generated By:', currentUser ? currentUser.username : 'Unknown']);
+    ws_data.push(['Generated By:', currentUser ? (currentUser.agentName || currentUser.username) : 'Unknown']);
     ws_data.push(['Branch Code:', branchCode]);
     ws_data.push([]);
     ws_data.push(['Date of Alert', 'Assigned Branch', 'Total Transaction', 'Amount', 'Customer ID', 'Customer Name']);
@@ -1122,21 +1107,25 @@ function generateReport() {
     }
     const stats = calculateStats(globalData);
     const customerName = globalData[0]["Customer Name"] || "Unknown";
+    
     document.getElementById('reportCustomerName').textContent = customerName;
     document.getElementById('reportCustomerId').textContent = currentCustomer;
     document.getElementById('reportDate').textContent = new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'long', day: 'numeric' });
     document.getElementById('reportNumber').textContent = generateReportNumber();
+    document.getElementById('reportGeneratedBy').textContent = currentUser ? (currentUser.agentName || currentUser.username) : 'Unknown';
     document.getElementById('reportTotalRecords').textContent = stats.totalRecords;
     document.getElementById('reportTotalAmount').textContent = formatCurrency(stats.totalAmount);
     document.getElementById('reportAmountAssessment').textContent = stats.totalAmount > 1000000 ? 'High Value' : 'Standard';
     document.getElementById('reportHighRisk').textContent = stats.highRisk;
     document.getElementById('reportNormal').textContent = stats.normal;
+    
     const tbody = document.getElementById('reportTableBody');
     tbody.innerHTML = globalData.map((row, index) => {
         const isHigh = row["Status"]?.toLowerCase() === "high";
         const assignedTo = row["Assigned To"] || row["Assisgned to"] || '';
         return `<tr><td>${index + 1}</td><td>${formatDate(row["Date of Alert"])}</td><td>${escapeHtml(row["Transaction Type"]) || ''}</td><td>${formatCurrency(row["Amount"])}</td><td style="color: ${isHigh ? 'var(--danger)' : 'var(--success)'}; font-weight: bold;">${escapeHtml(row["Status"]) || ''}</td><td>${escapeHtml(assignedTo)}</td></tr>`;
     }).join('');
+    
     window.print();
 }
 
@@ -1146,7 +1135,6 @@ function generateReport() {
 document.addEventListener('DOMContentLoaded', function() {
     checkExistingSession();
     
-    // Enter key listeners
     document.getElementById('customerId')?.addEventListener('keypress', function(e) { 
         if (e.key === 'Enter') searchCustomer(); 
     });
@@ -1160,7 +1148,6 @@ document.addEventListener('DOMContentLoaded', function() {
         e.target.value = e.target.value.toUpperCase();
     });
     
-    // Activity tracking for session timeout
     document.addEventListener('click', resetSessionTimer);
     document.addEventListener('keypress', resetSessionTimer);
 });
