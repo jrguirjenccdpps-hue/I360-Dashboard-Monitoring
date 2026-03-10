@@ -19,6 +19,7 @@ let globalData = [];
 let currentCustomer = "";
 let chartInstances = [];
 let availableAreas = [];
+let isAreaDropdownLoaded = false; // Track if dropdown is loaded
 
 // ============================================
 // AUTHENTICATION FUNCTIONS
@@ -73,8 +74,8 @@ async function handleLogin(event) {
             document.getElementById('username').value = '';
             document.getElementById('password').value = '';
             
-            // Load areas for Area Checker
-            loadAreaDropdown();
+            // Load areas for Area Checker with retry logic
+            await loadAreaDropdownWithRetry();
             
         } else {
             showLoginError(result.message || 'Authentication failed');
@@ -174,6 +175,7 @@ function handleLogout() {
     sessionStorage.removeItem('pgcpi_user');
     sessionStorage.removeItem('pgcpi_sessionExpiry');
     currentUser = null;
+    isAreaDropdownLoaded = false; // Reset flag
     
     chartInstances.forEach(chart => {
         if (chart) chart.destroy();
@@ -227,7 +229,8 @@ function checkExistingSession() {
             sessionExpiry = parseInt(expiry);
             startSessionTimer();
             showMainApp();
-            loadAreaDropdown();
+            // Load areas with retry when restoring session
+            loadAreaDropdownWithRetry();
         } catch (e) {
             sessionStorage.removeItem('pgcpi_user');
             sessionStorage.removeItem('pgcpi_sessionExpiry');
@@ -236,13 +239,18 @@ function checkExistingSession() {
 }
 
 // ============================================
-// TAB NAVIGATION
+// TAB NAVIGATION - FIXED
 // ============================================
 function switchTab(tabName) {
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
     document.getElementById(`tab-${tabName}`).classList.add('active');
     document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
     document.getElementById(`${tabName}Tab`).classList.add('active');
+    
+    // Load area dropdown when switching to areaChecker tab if not loaded
+    if (tabName === 'areaChecker' && currentUser && !isAreaDropdownLoaded) {
+        loadAreaDropdownWithRetry();
+    }
 }
 
 // ============================================
@@ -1052,39 +1060,140 @@ function showBranchError(message) {
 }
 
 // ============================================
-// AREA CHECKER
+// AREA CHECKER - FIXED WITH RETRY LOGIC
 // ============================================
 
-async function loadAreaDropdown() {
-    try {
-        const params = new URLSearchParams({
-            action: 'getAreas'
-        });
-        
-        const response = await fetch(`${WEB_APP_URL}?${params.toString()}`);
-        const result = await response.json();
-
-        if (result.success && result.areas) {
-            availableAreas = result.areas;
-            populateAreaDropdown(result.areas);
-        }
-    } catch (error) {
-        console.error('Error loading areas:', error);
+/**
+ * Load area dropdown with retry logic and loading state
+ * @param {number} maxRetries - Maximum number of retry attempts
+ * @param {number} delay - Delay between retries in ms
+ */
+async function loadAreaDropdownWithRetry(maxRetries = 3, delay = 1000) {
+    const select = document.getElementById('areaNameSelect');
+    
+    // Set loading state
+    if (select) {
+        select.innerHTML = '<option value="">⏳ Loading areas...</option>';
+        select.disabled = true;
     }
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            console.log(`Loading areas (attempt ${attempt}/${maxRetries})...`);
+            
+            const params = new URLSearchParams({
+                action: 'getAreas'
+            });
+            
+            // Add timeout to fetch
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+            
+            const response = await fetch(`${WEB_APP_URL}?${params.toString()}`, {
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const result = await response.json();
+            
+            if (result.success && result.areas && Array.isArray(result.areas) && result.areas.length > 0) {
+                availableAreas = result.areas;
+                populateAreaDropdown(result.areas);
+                isAreaDropdownLoaded = true;
+                console.log(`✅ Areas loaded successfully: ${result.areas.length} areas`);
+                return; // Success - exit function
+            } else if (result.success && (!result.areas || result.areas.length === 0)) {
+                console.warn('API returned success but no areas found');
+                if (select) {
+                    select.innerHTML = '<option value="">⚠️ No areas available</option>';
+                }
+                isAreaDropdownLoaded = true; // Mark as loaded (even if empty)
+                return;
+            } else {
+                throw new Error(result.message || 'Invalid response from server');
+            }
+            
+        } catch (error) {
+            console.error(`Attempt ${attempt} failed:`, error);
+            
+            if (attempt === maxRetries) {
+                // Final attempt failed
+                console.error('All retry attempts exhausted');
+                if (select) {
+                    select.innerHTML = '<option value="">❌ Failed to load areas</option>';
+                    select.disabled = false;
+                    
+                    // Add retry button
+                    const retryBtn = document.createElement('button');
+                    retryBtn.textContent = '🔄 Retry';
+                    retryBtn.className = 'btn-retry';
+                    retryBtn.onclick = () => loadAreaDropdownWithRetry();
+                    retryBtn.style.cssText = 'margin-left: 10px; padding: 5px 10px; cursor: pointer;';
+                    
+                    // Insert after select if not already present
+                    if (!select.nextElementSibling || !select.nextElementSibling.classList.contains('btn-retry')) {
+                        select.parentNode.insertBefore(retryBtn, select.nextSibling);
+                    }
+                }
+                
+                // Show user-friendly error in area results if visible
+                const areaResults = document.getElementById('areaResults');
+                if (areaResults && !areaResults.querySelector('.alert')) {
+                    areaResults.innerHTML = `
+                        <div class="alert alert-error">
+                            <span>⚠️</span>
+                            <span>Failed to load area list. Please click "Retry" or refresh the page.</span>
+                        </div>
+                    `;
+                }
+            } else {
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+}
+
+/**
+ * Legacy function - kept for compatibility
+ * Use loadAreaDropdownWithRetry() instead
+ */
+async function loadAreaDropdown() {
+    return loadAreaDropdownWithRetry();
 }
 
 function populateAreaDropdown(areas) {
     const select = document.getElementById('areaNameSelect');
-    if (!select) return;
+    if (!select) {
+        console.error('Area select element not found');
+        return;
+    }
     
     select.innerHTML = '<option value="">-- Select Area --</option>';
+    select.disabled = false;
     
-    areas.sort().forEach(area => {
+    // Remove retry button if exists
+    const retryBtn = select.parentNode.querySelector('.btn-retry');
+    if (retryBtn) {
+        retryBtn.remove();
+    }
+    
+    // Sort areas alphabetically
+    areas.sort((a, b) => a.localeCompare(b));
+    
+    areas.forEach(area => {
         const option = document.createElement('option');
         option.value = area;
         option.textContent = area;
         select.appendChild(option);
     });
+    
+    console.log(`Dropdown populated with ${areas.length} areas`);
 }
 
 async function searchArea() {
@@ -1734,7 +1843,7 @@ function generateReport() {
 }
 
 // ============================================
-// EVENT LISTENERS
+// EVENT LISTENERS - UPDATED
 // ============================================
 document.addEventListener('DOMContentLoaded', function() {
     checkExistingSession();
@@ -1755,6 +1864,16 @@ document.addEventListener('DOMContentLoaded', function() {
     // Area Checker event listeners
     document.getElementById('areaNameSelect')?.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') searchArea();
+    });
+    
+    // Add tab change listener to reload dropdown when Area Checker tab is shown
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const tabName = this.id.replace('tab-', '');
+            if (tabName === 'areaChecker' && currentUser && !isAreaDropdownLoaded) {
+                loadAreaDropdownWithRetry();
+            }
+        });
     });
     
     document.addEventListener('click', resetSessionTimer);
