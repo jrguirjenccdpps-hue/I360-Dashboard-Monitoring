@@ -11,10 +11,14 @@ let sessionExpiry = null;
 // App State
 let currentUser = null;
 let branchChartInstance = null;
+let areaChartInstance = null;
+let typeChartInstance = null;
 let currentBranchData = [];
+let currentAreaData = [];
 let globalData = [];
 let currentCustomer = "";
 let chartInstances = [];
+let availableAreas = [];
 
 // ============================================
 // AUTHENTICATION FUNCTIONS
@@ -33,7 +37,6 @@ async function handleLogin(event) {
     errorDiv.classList.remove('show');
     
     try {
-        // Get client info from browser
         const clientInfo = await getClientInfo();
         
         const params = new URLSearchParams({
@@ -52,10 +55,9 @@ async function handleLogin(event) {
         const result = await response.json();
         
         if (result.success) {
-            // Store session data with AGENT NAME
             currentUser = {
                 username: result.user.username,
-                agentName: result.user.agentName,  // Agent Name from Column C
+                agentName: result.user.agentName,
                 role: result.user.role,
                 department: result.user.department,
                 sessionToken: result.sessionToken,
@@ -70,6 +72,9 @@ async function handleLogin(event) {
             
             document.getElementById('username').value = '';
             document.getElementById('password').value = '';
+            
+            // Load areas for Area Checker
+            loadAreaDropdown();
             
         } else {
             showLoginError(result.message || 'Authentication failed');
@@ -96,14 +101,12 @@ async function getClientInfo() {
     
     const ua = navigator.userAgent;
     
-    // Device Type
     if (/Mobile|Android|iPhone|iPod/i.test(ua)) {
         info.deviceType = /iPad|Tablet/i.test(ua) ? 'Tablet' : 'Mobile';
     } else {
         info.deviceType = 'Desktop';
     }
     
-    // Browser
     if (/Chrome/i.test(ua) && !/Edge/i.test(ua)) info.browser = 'Chrome';
     else if (/Firefox/i.test(ua)) info.browser = 'Firefox';
     else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) info.browser = 'Safari';
@@ -111,7 +114,6 @@ async function getClientInfo() {
     else if (/Opera|OPR/i.test(ua)) info.browser = 'Opera';
     else info.browser = 'Other';
     
-    // OS
     if (/Windows NT 10/i.test(ua)) info.os = 'Windows 10/11';
     else if (/Windows NT 6.3/i.test(ua)) info.os = 'Windows 8.1';
     else if (/Windows NT 6.2/i.test(ua)) info.os = 'Windows 8';
@@ -122,7 +124,6 @@ async function getClientInfo() {
     else if (/iOS|iPhone|iPad/i.test(ua)) info.os = 'iOS';
     else info.os = 'Other';
     
-    // Get IP
     try {
         const ipResponse = await fetch('https://api.ipify.org?format=json');
         const ipData = await ipResponse.json();
@@ -174,11 +175,21 @@ function handleLogout() {
     sessionStorage.removeItem('pgcpi_sessionExpiry');
     currentUser = null;
     
-    chartInstances.forEach(chart => chart.destroy());
+    chartInstances.forEach(chart => {
+        if (chart) chart.destroy();
+    });
     chartInstances = [];
     if (branchChartInstance) {
         branchChartInstance.destroy();
         branchChartInstance = null;
+    }
+    if (areaChartInstance) {
+        areaChartInstance.destroy();
+        areaChartInstance = null;
+    }
+    if (typeChartInstance) {
+        typeChartInstance.destroy();
+        typeChartInstance = null;
     }
     
     location.reload();
@@ -189,7 +200,6 @@ function showMainApp() {
     document.getElementById('mainApp').classList.add('logged-in');
     
     if (currentUser) {
-        // Display AGENT NAME instead of username
         const displayName = currentUser.agentName || currentUser.username;
         const initial = displayName.charAt(0).toUpperCase();
         
@@ -217,6 +227,7 @@ function checkExistingSession() {
             sessionExpiry = parseInt(expiry);
             startSessionTimer();
             showMainApp();
+            loadAreaDropdown();
         } catch (e) {
             sessionStorage.removeItem('pgcpi_user');
             sessionStorage.removeItem('pgcpi_sessionExpiry');
@@ -282,7 +293,9 @@ async function searchCustomer() {
     currentCustomer = id;
     const container = document.getElementById('resultsContainer');
     
-    chartInstances.forEach(chart => chart.destroy());
+    chartInstances.forEach(chart => {
+        if (chart) chart.destroy();
+    });
     chartInstances = [];
 
     container.innerHTML = `
@@ -1039,6 +1052,597 @@ function showBranchError(message) {
 }
 
 // ============================================
+// AREA CHECKER
+// ============================================
+
+async function loadAreaDropdown() {
+    try {
+        const params = new URLSearchParams({
+            action: 'getAreas'
+        });
+        
+        const response = await fetch(`${WEB_APP_URL}?${params.toString()}`);
+        const result = await response.json();
+
+        if (result.success && result.areas) {
+            availableAreas = result.areas;
+            populateAreaDropdown(result.areas);
+        }
+    } catch (error) {
+        console.error('Error loading areas:', error);
+    }
+}
+
+function populateAreaDropdown(areas) {
+    const select = document.getElementById('areaNameSelect');
+    if (!select) return;
+    
+    select.innerHTML = '<option value="">-- Select Area --</option>';
+    
+    areas.sort().forEach(area => {
+        const option = document.createElement('option');
+        option.value = area;
+        option.textContent = area;
+        select.appendChild(option);
+    });
+}
+
+async function searchArea() {
+    if (!currentUser) {
+        alert('Session expired. Please login again.');
+        handleLogout();
+        return;
+    }
+    
+    const areaName = document.getElementById('areaNameSelect').value;
+    const dateFrom = document.getElementById('areaDateFrom').value;
+    const dateTo = document.getElementById('areaDateTo').value;
+    
+    if (!areaName) {
+        showAreaError('Please select an area to analyze');
+        return;
+    }
+
+    const container = document.getElementById('areaResults');
+    container.innerHTML = `
+        <div class="loading-container">
+            <div class="spinner"></div>
+            <p>Analyzing area: <strong>${escapeHtml(areaName)}</strong></p>
+            <p style="font-size: 0.9rem; color: var(--text-muted); margin-top: 10px;">
+                ${dateFrom && dateTo ? `Date range: ${formatDate(dateFrom)} - ${formatDate(dateTo)}` : 'All dates'}
+            </p>
+        </div>
+    `;
+
+    try {
+        if (areaChartInstance) {
+            areaChartInstance.destroy();
+            areaChartInstance = null;
+        }
+        if (typeChartInstance) {
+            typeChartInstance.destroy();
+            typeChartInstance = null;
+        }
+
+        const params = new URLSearchParams({
+            action: 'getAreaData',
+            areaName: areaName
+        });
+        
+        if (dateFrom) params.append('dateFrom', dateFrom);
+        if (dateTo) params.append('dateTo', dateTo);
+        
+        const response = await fetch(`${WEB_APP_URL}?${params.toString()}`);
+        const result = await response.json();
+
+        if (!result.success) {
+            container.innerHTML = `<div class="alert alert-error"><span>⚠️</span><span>${escapeHtml(result.message)}</span></div>`;
+            return;
+        }
+
+        if (!result.data || result.data.length === 0) {
+            container.innerHTML = `
+                <div class="alert alert-error"><span>⚠️</span><span>No records found for area "<strong>${escapeHtml(areaName)}</strong>"</span></div>
+                <div class="alert alert-info" style="margin-top: 10px;">
+                    <span>💡</span>
+                    <span><strong>Search Tips:</strong><br>• Try selecting a different area<br>• Adjust the date range<br>• Check if data exists for this area</span>
+                </div>
+            `;
+            currentAreaData = [];
+            return;
+        }
+
+        currentAreaData = result.data;
+        renderAreaResults(result.data, areaName, dateFrom, dateTo, result.summary);
+
+    } catch (error) {
+        console.error('Area search error:', error);
+        container.innerHTML = `<div class="alert alert-error"><span>⚠️</span><span>Failed to analyze area. Please check your connection.</span></div>`;
+    }
+}
+
+function renderAreaResults(data, areaName, dateFrom, dateTo, summary) {
+    const container = document.getElementById('areaResults');
+    
+    // Calculate statistics
+    const totalAmount = data.reduce((sum, r) => sum + (parseFloat(r["Total Amount"]) || parseFloat(r["Amount"]) || 0), 0);
+    const totalTransactions = data.reduce((sum, r) => sum + (parseFloat(r["Total Transaction"]) || 0), 0);
+    
+    // Group by branch
+    const branchStats = data.reduce((acc, row) => {
+        const branch = row["Assigned Branch"] || 'Unknown';
+        if (!acc[branch]) {
+            acc[branch] = {
+                count: 0,
+                totalAmount: 0,
+                totalTransactions: 0
+            };
+        }
+        acc[branch].count++;
+        acc[branch].totalAmount += parseFloat(row["Total Amount"] || row["Amount"] || 0);
+        acc[branch].totalTransactions += parseFloat(row["Total Transaction"] || 0);
+        return acc;
+    }, {});
+    
+    const branchList = Object.entries(branchStats).sort((a, b) => b[1].totalTransactions - a[1].totalTransactions);
+    
+    // Get unique clusters and regions
+    const clusters = [...new Set(data.map(r => r["CLUSTER"]).filter(Boolean))];
+    const regions = [...new Set(data.map(r => r["Region"]).filter(Boolean))];
+    
+    // Generate daily data for chart
+    const dailyData = generateDailySummary(data);
+    
+    const html = `
+        <div class="fade-in">
+            <!-- Area Profile Card -->
+            <div class="area-profile-card">
+                <div class="area-profile-header">
+                    <div>
+                        <div class="area-profile-title">Area Profile</div>
+                        <div class="area-profile-value">${escapeHtml(areaName)}</div>
+                        <div class="area-profile-sub">${dateFrom && dateTo ? `${formatDate(dateFrom)} - ${formatDate(dateTo)}` : 'All Time Period'}</div>
+                    </div>
+                    <div style="font-size: 3rem; opacity: 0.3;">🗺️</div>
+                </div>
+                <div class="area-profile-grid">
+                    <div class="area-profile-item">
+                        <div class="area-profile-label">Cluster</div>
+                        <div class="area-profile-data">${escapeHtml(clusters.join(', ') || 'N/A')}</div>
+                    </div>
+                    <div class="area-profile-item">
+                        <div class="area-profile-label">Region</div>
+                        <div class="area-profile-data">${escapeHtml(regions.join(', ') || 'N/A')}</div>
+                    </div>
+                    <div class="area-profile-item">
+                        <div class="area-profile-label">Total Branches</div>
+                        <div class="area-profile-data">${branchList.length} Active</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Summary Stats -->
+            <div class="area-summary-grid">
+                <div class="area-stat-card amount">
+                    <div class="area-stat-header">
+                        <span class="area-stat-label">Total Amount</span>
+                        <span class="area-stat-icon">💰</span>
+                    </div>
+                    <div class="area-stat-value amount">${formatCurrency(totalAmount)}</div>
+                    <div class="area-stat-subtext">Cumulative transaction value</div>
+                </div>
+                <div class="area-stat-card transactions">
+                    <div class="area-stat-header">
+                        <span class="area-stat-label">Total Transactions</span>
+                        <span class="area-stat-icon">📊</span>
+                    </div>
+                    <div class="area-stat-value transactions">${totalTransactions.toLocaleString()}</div>
+                    <div class="area-stat-subtext">Transaction count</div>
+                </div>
+                <div class="area-stat-card">
+                    <div class="area-stat-header">
+                        <span class="area-stat-label">Avg Amount/Transaction</span>
+                        <span class="area-stat-icon">📈</span>
+                    </div>
+                    <div class="area-stat-value">${formatCurrency(totalTransactions > 0 ? totalAmount / totalTransactions : 0)}</div>
+                    <div class="area-stat-subtext">Average transaction size</div>
+                </div>
+                <div class="area-stat-card branches">
+                    <div class="area-stat-header">
+                        <span class="area-stat-label">Branches</span>
+                        <span class="area-stat-icon">🏢</span>
+                    </div>
+                    <div class="area-stat-value branches">${branchList.length}</div>
+                    <div class="area-stat-subtext">Active branches</div>
+                </div>
+            </div>
+
+            <div class="content-grid">
+                <!-- Branch List Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">🏢 Branches in ${escapeHtml(areaName)}</div>
+                        <span style="font-size: 0.9rem; color: var(--text-muted);">${branchList.length} branches</span>
+                    </div>
+                    <div class="card-body branch-list-card">
+                        ${branchList.map(([branch, stats]) => `
+                            <div class="branch-list-item">
+                                <div class="branch-list-info">
+                                    <div class="branch-list-icon">🏦</div>
+                                    <div class="branch-list-details">
+                                        <div class="branch-list-name">${escapeHtml(branch)}</div>
+                                        <div class="branch-list-meta">${stats.count} records</div>
+                                    </div>
+                                </div>
+                                <div class="branch-list-stats">
+                                    <div class="branch-list-count">${stats.totalTransactions.toLocaleString()}</div>
+                                    <div class="branch-list-label">Transactions</div>
+                                    <div style="font-size: 0.85rem; color: var(--accent); font-weight: 600; margin-top: 4px;">
+                                        ${formatCurrency(stats.totalAmount)}
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <!-- Transaction Types Breakdown -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">📝 Transaction Types</div>
+                        <span style="font-size: 0.9rem; color: var(--text-muted);">Distribution</span>
+                    </div>
+                    <div class="card-body">
+                        <div style="height: 400px; position: relative;">
+                            <canvas id="typeChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Analytics Chart -->
+            <div class="area-chart-container">
+                <div class="area-chart-header">
+                    <div>
+                        <div class="area-chart-title">📈 Transaction Behavior Analysis</div>
+                        <div class="area-chart-subtitle">Amount vs Transaction Count Over Time</div>
+                    </div>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <span style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--accent);">
+                            <span style="width: 12px; height: 12px; background: var(--accent); border-radius: 2px;"></span> Amount
+                        </span>
+                        <span style="display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--purple);">
+                            <span style="width: 12px; height: 12px; background: var(--purple); border-radius: 2px;"></span> Transactions
+                        </span>
+                    </div>
+                </div>
+                <div class="area-chart-wrapper">
+                    <canvas id="areaBehaviorChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Detailed Data Table -->
+            <div class="card" style="margin-bottom: 30px;">
+                <div class="card-header">
+                    <div class="card-title">📋 Detailed Transaction Records</div>
+                    <span style="font-size: 0.9rem; color: var(--text-muted);">${data.length} entries</span>
+                </div>
+                <div class="card-body" style="padding: 0;">
+                    <div class="table-container" style="max-height: 500px; overflow-y: auto;">
+                        <table class="data-table">
+                            <thead style="position: sticky; top: 0; z-index: 10;">
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Branch</th>
+                                    <th>Type</th>
+                                    <th style="text-align: center;">Transactions</th>
+                                    <th style="text-align: right;">Amount</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.map((row, index) => `
+                                    <tr>
+                                        <td>${formatDate(row["Date of Alert"])}</td>
+                                        <td>${escapeHtml(row["Assigned Branch"] || '—')}</td>
+                                        <td>${escapeHtml(row["Transaction Type"] || 'General')}</td>
+                                        <td style="text-align: center; font-family: monospace; font-weight: 600;">
+                                            ${parseInt(row["Total Transaction"] || 0).toLocaleString()}
+                                        </td>
+                                        <td style="text-align: right; font-weight: 600; color: var(--accent);">
+                                            ${formatCurrency(row["Total Amount"] || row["Amount"] || 0)}
+                                        </td>
+                                        <td>
+                                            <span class="status-badge ${(row["Status"]?.toLowerCase() === 'high') ? 'status-high' : 'status-normal'}">
+                                                ${escapeHtml(row["Status"] || 'Normal')}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    container.innerHTML = html;
+    
+    // Initialize charts
+    initializeAreaChart(dailyData);
+    initializeTransactionTypeChart(data);
+}
+
+function generateDailySummary(data) {
+    const summary = {};
+    
+    data.forEach(row => {
+        const dateStr = row["Date of Alert"];
+        if (!dateStr) return;
+        
+        const date = new Date(dateStr);
+        if (isNaN(date)) return;
+        
+        const key = date.toISOString().split('T')[0]; // YYYY-MM-DD
+        
+        if (!summary[key]) {
+            summary[key] = {
+                date: key,
+                displayDate: date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' }),
+                amount: 0,
+                transactions: 0,
+                count: 0
+            };
+        }
+        
+        summary[key].amount += parseFloat(row["Total Amount"] || row["Amount"] || 0);
+        summary[key].transactions += parseFloat(row["Total Transaction"] || 0);
+        summary[key].count++;
+    });
+    
+    // Sort by date
+    return Object.values(summary).sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+function initializeAreaChart(dailyData) {
+    const ctx = document.getElementById('areaBehaviorChart');
+    if (!ctx || dailyData.length === 0) return;
+    
+    const labels = dailyData.map(d => d.displayDate);
+    const amounts = dailyData.map(d => d.amount);
+    const transactions = dailyData.map(d => d.transactions);
+    
+    areaChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Amount (PHP)',
+                    data: amounts,
+                    borderColor: '#059669',
+                    backgroundColor: 'rgba(5, 150, 105, 0.1)',
+                    yAxisID: 'y',
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 5,
+                    pointHoverRadius: 8,
+                    pointBackgroundColor: '#059669',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2
+                },
+                {
+                    label: 'Total Transactions',
+                    data: transactions,
+                    borderColor: '#7c3aed',
+                    backgroundColor: 'rgba(124, 58, 237, 0.1)',
+                    yAxisID: 'y1',
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 5,
+                    pointHoverRadius: 8,
+                    pointBackgroundColor: '#7c3aed',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 20,
+                        font: { size: 12, weight: '600' }
+                    }
+                },
+                tooltip: {
+                    backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                    padding: 12,
+                    cornerRadius: 8,
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label + ': ';
+                            if (context.dataset.yAxisID === 'y') {
+                                label += formatCurrency(context.raw);
+                            } else {
+                                label += context.raw.toLocaleString();
+                            }
+                            return label;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: {
+                        maxRotation: 45,
+                        minRotation: 45
+                    }
+                },
+                y: {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    title: {
+                        display: true,
+                        text: 'Amount (PHP)',
+                        color: '#059669',
+                        font: { weight: 'bold' }
+                    },
+                    ticks: {
+                        callback: function(value) {
+                            return '₱' + (value / 1000).toFixed(0) + 'k';
+                        },
+                        color: '#059669'
+                    },
+                    grid: { color: 'rgba(0,0,0,0.05)' }
+                },
+                y1: {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: {
+                        display: true,
+                        text: 'Transaction Count',
+                        color: '#7c3aed',
+                        font: { weight: 'bold' }
+                    },
+                    ticks: {
+                        color: '#7c3aed'
+                    },
+                    grid: { drawOnChartArea: false }
+                }
+            }
+        }
+    });
+}
+
+function initializeTransactionTypeChart(data) {
+    const ctx = document.getElementById('typeChart');
+    if (!ctx) return;
+    
+    // Group by transaction type
+    const typeStats = data.reduce((acc, row) => {
+        const type = row["Transaction Type"] || 'General';
+        if (!acc[type]) {
+            acc[type] = { count: 0, amount: 0 };
+        }
+        acc[type].count += parseFloat(row["Total Transaction"] || 0);
+        acc[type].amount += parseFloat(row["Total Amount"] || row["Amount"] || 0);
+        return acc;
+    }, {});
+    
+    const labels = Object.keys(typeStats);
+    const counts = Object.values(typeStats).map(v => v.count);
+    const colors = [
+        '#0ea5e9', '#8b5cf6', '#f59e0b', '#10b981', 
+        '#ef4444', '#ec4899', '#6366f1', '#14b8a6'
+    ];
+    
+    typeChartInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: counts,
+                backgroundColor: colors,
+                borderWidth: 0,
+                hoverOffset: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: {
+                        padding: 15,
+                        font: { size: 11 },
+                        generateLabels: function(chart) {
+                            const data = chart.data;
+                            return data.labels.map((label, i) => ({
+                                text: `${label}: ${data.datasets[0].data[i].toLocaleString()}`,
+                                fillStyle: data.datasets[0].backgroundColor[i],
+                                hidden: false,
+                                index: i
+                            }));
+                        }
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const label = context.label || '';
+                            const value = context.raw;
+                            const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                            const percentage = ((value / total) * 100).toFixed(1);
+                            return `${label}: ${value.toLocaleString()} (${percentage}%)`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function showAreaError(message) {
+    document.getElementById('areaResults').innerHTML = `
+        <div class="alert alert-error"><span>⚠️</span><span>${message}</span></div>
+    `;
+}
+
+function exportAreaToExcel() {
+    if (!currentAreaData || currentAreaData.length === 0) {
+        alert('⚠️ No area data available to export. Please search for an area first.');
+        return;
+    }
+    
+    const areaName = document.getElementById('areaNameSelect').value;
+    const dateFrom = document.getElementById('areaDateFrom').value;
+    const dateTo = document.getElementById('areaDateTo').value;
+    
+    const ws_data = [];
+    
+    ws_data.push(['Area Analysis Report']);
+    ws_data.push(['Generated:', new Date().toLocaleString()]);
+    ws_data.push(['Generated By:', currentUser ? (currentUser.agentName || currentUser.username) : 'Unknown']);
+    ws_data.push(['Area:', areaName]);
+    ws_data.push(['Date Range:', dateFrom && dateTo ? `${dateFrom} to ${dateTo}` : 'All Dates']);
+    ws_data.push([]);
+    ws_data.push(['Date of Alert', 'Assigned Branch', 'Transaction Type', 'Total Transaction', 'Total Amount', 'Status', 'Cluster', 'Region']);
+    
+    currentAreaData.forEach(row => {
+        ws_data.push([
+            row["Date of Alert"] || '',
+            row["Assigned Branch"] || '',
+            row["Transaction Type"] || '',
+            row["Total Transaction"] || 0,
+            row["Total Amount"] || row["Amount"] || 0,
+            row["Status"] || '',
+            row["CLUSTER"] || '',
+            row["Region"] || ''
+        ]);
+    });
+    
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(ws_data);
+    ws['!cols'] = [{ wch: 15 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 15 }];
+    XLSX.utils.book_append_sheet(wb, ws, "Area Analysis");
+    XLSX.writeFile(wb, `Area_Analysis_${areaName}_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+// ============================================
 // EXPORT FUNCTIONS
 // ============================================
 function exportToExcel() {
@@ -1146,6 +1750,11 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     document.getElementById('branchCode')?.addEventListener('input', function(e) {
         e.target.value = e.target.value.toUpperCase();
+    });
+    
+    // Area Checker event listeners
+    document.getElementById('areaNameSelect')?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') searchArea();
     });
     
     document.addEventListener('click', resetSessionTimer);
